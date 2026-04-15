@@ -1,12 +1,16 @@
 package com.wiz.mywifi
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.ScanResult
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Bundle
@@ -16,14 +20,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +36,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.wiz.mywifi.ui.theme.MyWifiTheme
 
@@ -66,6 +70,7 @@ fun WifiStatusScreen(modifier: Modifier = Modifier) {
     var bssid by remember { mutableStateOf("N/A") }
     var speed by remember { mutableStateOf("0 Mbps") }
     var freq by remember { mutableStateOf("0 MHz") }
+    var scanResults by remember { mutableStateOf<List<ScanResult>>(emptyList()) }
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -84,6 +89,12 @@ fun WifiStatusScreen(modifier: Modifier = Modifier) {
 
     val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+
+    fun startScan() {
+        if (hasLocationPermission) {
+            wifiManager.startScan()
+        }
+    }
 
     fun updateWifiInfo() {
         val network = connectivityManager.activeNetwork
@@ -118,10 +129,33 @@ fun WifiStatusScreen(modifier: Modifier = Modifier) {
             override fun onCapabilitiesChanged(network: Network, cap: NetworkCapabilities) { updateWifiInfo() }
         }
 
+        val wifiScanReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val success = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                if (success) {
+                    if (ActivityCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        scanResults = wifiManager.scanResults
+                    }
+                }
+            }
+        }
+
+        val intentFilter = IntentFilter()
+        intentFilter.addAction(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        context.registerReceiver(wifiScanReceiver, intentFilter)
+
         connectivityManager.registerNetworkCallback(networkRequest, callback)
         updateWifiInfo()
+        startScan()
 
-        onDispose { connectivityManager.unregisterNetworkCallback(callback) }
+        onDispose {
+            connectivityManager.unregisterNetworkCallback(callback)
+            context.unregisterReceiver(wifiScanReceiver)
+        }
     }
 
     val mainColor = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
@@ -164,7 +198,34 @@ fun WifiStatusScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Redes cercanas",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = { startScan() }) {
+                Icon(Icons.Default.Refresh, contentDescription = "Escanear")
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(scanResults) { result ->
+                WifiScanItem(result)
+            }
+        }
 
         if (!hasLocationPermission) {
             Surface(
@@ -189,6 +250,44 @@ fun WifiStatusScreen(modifier: Modifier = Modifier) {
                         Text("CONCEDER")
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun WifiScanItem(scanResult: ScanResult) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Wifi,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column {
+                Text(
+                    text = if (scanResult.SSID.isEmpty()) "Red oculta" else scanResult.SSID,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Intensidad: ${scanResult.level} dBm",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
